@@ -89,24 +89,33 @@ git_status () {
 }
 
 status () {
-    if [ $# -ne 3 ]; then
+    if [ $# -ne 4 ]; then
 	error "DEBUG: bad call to status" 1
     fi
 
-    if [ ${#2} -eq 0 ]; then
-        printf "'ref:%s'\n" $1
+    if [ ${#3} -eq 0 ]; then
+        printf -v stat_line "file:%s ref:%s" $1 $2
     else
-        stat=$( git_status $2 )
-        printf "'ref:%s status:%s blob:%s'\n" $1 $stat $3
+        stat=$( git_status $3 )
+        printf -v stat_line "file:%s ref:%s status:%s blob:%s" $1 $2 $stat $4
+    fi
+    if [ ${var_name-NONE} != 'NONE' ]
+    then
+        printf "    & '%s" "$stat_line"
+    else
+        printf "$stat_line"
     fi
 }
 
 
 # Parse opions
-while getopts "h" opt; do
+while getopts "hv:" opt; do
     case "$opt" in
         h)
             usage 0
+            ;;
+        v)
+            var_name=${OPTARG}
             ;;
     esac
 done
@@ -118,37 +127,41 @@ if [ $? -ne 0 ]; then
     error "FATAL: git is not in PATH" 1
 fi
 
-if [ $# -eq 1 ]; then
+# Begin writting variable if needed
+# Assuming Fortran ATT
+if [ ${var_name-NONE} != 'NONE' ]
+then
+    echo "CHARACTER(len=*), PARAMETER :: $var_name = &"
+fi
+
+while [ $# -ne 0 ];
+do
     dir=$( dirname $1 )
     file=$( basename $1 )
 
-    # Change into dir.
-    if [ -e $dir ]; then
-        if [ -d $dir ]; then
-            cd $dir
-        else
-            error "FATAL: $dir is not a directory" 1
-        fi
-    else
-        error "FATAL: Directory $dir does not exist" 1
+    # Skip directories
+    if [ -d $1 ]
+    then
+        shift
+        continue
     fi
 
     # Check if file exists
-    if [ ! -e $file ]; then
+    if [ ! -e $1 ]; then
         error "FATAL: File $file does not exist" 1
-    elif [ ! -r $file ]; then
+    elif [ ! -r $1 ]; then
         error "FATAL: File $file is not readable" 1
     fi
 
     # File exists, can get the blob hash
-    fileHash=$( git hash-object $file 2> /dev/null )
+    fileHash=$( git -C $dir hash-object $file 2> /dev/null )
     errorStat=$?
     if [ $errorStat -ne 0 ]; then
         error "WARNING: Failed to get hash of $file" 0
     fi
 
     # Trap error if not in a git work directory
-    repoHash=$( git rev-parse HEAD 2> /dev/null)
+    repoHash=$( git -C $dir rev-parse HEAD 2> /dev/null)
     errorStat=$?
     if [ $errorStat -eq 128 ]; then
         # Not in a git repository
@@ -157,13 +170,24 @@ if [ $# -eq 1 ]; then
         error "WARNING: Unknown 'git rev-parse' error $?" 0
     fi
 
-    fileStatus=$( git status --porcelain $file | awk '{print $1}' )
+    fileStatus=$( git -C $dir status --porcelain $file | awk '{print $1}' )
     errorStat=$?
     if [ $errorStat -ne 0 ]; then
         error "WARNING: Unable to get status of $file" 0 $fileHash
     fi
 
-    status "$repoHash" "$fileStatus" "$fileHash"
-else
-    usage 1
-fi
+    status "$1" "$repoHash" "$fileStatus" "$fileHash"
+
+    shift
+    if [ ${var_name-NONE} != 'NONE' ]
+    then
+        if [ $# -ne 0 ]
+        then
+            printf ",' // &\n"
+        else
+            printf "'\n"
+        fi
+    else
+        printf "\n"
+    fi
+done
